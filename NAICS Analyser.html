@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Company NAICS Analyzer</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      crossorigin="anonymous"
+    />
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css"
+      rel="stylesheet"
+      crossorigin="anonymous"
+    />
+    <style>
+      .drop-zone {
+        border: 2px dashed #ccc;
+        border-radius: 4px;
+        padding: 20px;
+        text-align: center;
+      }
+      .drop-zone.dragover {
+        background: #e9ecef;
+        border-color: #0d6efd;
+      }
+    </style>
+  </head>
+  <body class="container py-4">
+    <h1 class="mb-4"><i class="bi bi-building"></i> Company NAICS Analyzer</h1>
+
+    <div class="mb-4">
+      <button
+        class="btn btn-secondary"
+        type="button"
+        data-bs-toggle="collapse"
+        data-bs-target="#instructions"
+      >
+        <i class="bi bi-info-circle"></i> Show Instructions
+      </button>
+
+      <div class="collapse mt-3" id="instructions">
+        <div class="card card-body">
+          <h5>Instructions</h5>
+          <ol>
+            <li>Prepare a CSV file with a column titled "Company Name"</li>
+            <li>Upload the file (maximum 500 companies)</li>
+            <li>Wait for processing to complete</li>
+            <li>Download the results</li>
+          </ol>
+          <p>Output will include company URL, core functions, and 3 NAICS codes with reasons.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="drop-zone mb-4" id="dropZone">
+      <i class="bi bi-cloud-upload display-4"></i>
+      <p class="mb-2">Drag &amp; drop your CSV file here or click to select</p>
+      <input type="file" id="fileInput" accept=".csv" class="d-none" />
+      <button class="btn btn-primary" id="uploadBtn">
+        <i class="bi bi-upload"></i> Select File
+      </button>
+    </div>
+
+    <div id="progress" class="d-none">
+      <div class="card mb-4">
+        <div class="card-body">
+          <h5 class="card-title">Processing Companies</h5>
+          <div class="progress mb-3">
+            <div
+              class="progress-bar progress-bar-striped progress-bar-animated"
+              role="progressbar"
+            ></div>
+          </div>
+          <p class="mb-0" id="statusText">Processing company 0 of 0...</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="results" class="d-none">
+      <div class="card mb-4">
+        <div class="card-body">
+          <h5 class="card-title">Results</h5>
+          <button class="btn btn-success me-2" id="downloadBtn">
+            <i class="bi bi-download"></i> Download Results
+          </button>
+          <button class="btn btn-secondary" id="clearBtn"><i class="bi bi-trash"></i> Clear</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="alertArea"></div>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"
+      crossorigin="anonymous"
+    ></script>
+    <script type="module">
+      // Utility functions
+      function showAlert(message, type = 'danger') {
+          const alert = document.createElement('div');
+          alert.className = `alert alert-${type} alert-dismissible fade show`;
+          alert.innerHTML = `
+              ${message}
+              <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+          `;
+          document.getElementById('alertArea').prepend(alert);
+          setTimeout(() => alert.remove(), 5000);
+      }
+
+      async function processCompany(companyName) {
+          try {
+              // Search for company website
+              const searchResponse = await fetch(
+                  `https://www.googleapis.com/customsearch/v1?q=${encodeURIComponent(companyName + " official website")}&key=AIzaSyALXIKOGxTCnV4rQxFjB3dcs20EKcEr_jY&cx=010282404438907579631:edrnyb3axxi&num=1`
+              ).then(r => r.json());
+
+              if (!searchResponse.items?.[0]) {
+                  throw new Error("Company website not found");
+              }
+
+              const companyUrl = searchResponse.items[0].link;
+
+              // Fetch webpage content
+              const webpageContent = await fetch(`https://llmfoundry.straive.com/-/markdown?n=1&url=${encodeURIComponent(companyUrl)}`)
+                  .then(r => r.text());
+
+              // Extract core functions
+              const functionsResponse = await fetch("https://llmfoundry.straive.com/openai/v1/chat/completions", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  credentials: "include",
+                  body: JSON.stringify({
+                      model: "gpt-4o-mini",
+                      messages: [
+                          { role: "system", content: "Extract and summarize the company's core functions and services in 1-2 sentences." },
+                          { role: "user", content: [{ type: "text", text: webpageContent }] }
+                      ]
+                  })
+              }).then(r => r.json());
+
+              const coreFunctions = functionsResponse.choices?.[0]?.message?.content || "Unable to determine core functions";
+
+              // Determine NAICS codes
+              const naicsResponse = await fetch("https://llmfoundry.straive.com/openai/v1/chat/completions", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  credentials: "include",
+                  body: JSON.stringify({
+                      model: "gpt-4o-mini",
+                      messages: [
+                          { role: "system", content: "Based on the company description, provide the 3 most relevant NAICS codes with brief explanations. Format as JSON: {\"codes\":[{\"code\":\"123456\",\"reason\":\"explanation\"}]}" },
+                          { role: "user", content: [{ type: "text", text: coreFunctions }] }
+                      ],
+                      response_format: { type: "json_object" }
+                  })
+              }).then(r => r.json());
+
+              const naicsCodes = JSON.parse(naicsResponse.choices?.[0]?.message?.content || "{}").codes || [];
+
+              return {
+                  "Company Name": companyName,
+                  "Company URL": companyUrl,
+                  "Core Functions Summary": coreFunctions,
+                  "NAICS Code 1": naicsCodes[0]?.code || "",
+                  "Reason for NAICS Code 1": naicsCodes[0]?.reason || "",
+                  "NAICS Code 2": naicsCodes[1]?.code || "",
+                  "Reason for NAICS Code 2": naicsCodes[1]?.reason || "",
+                  "NAICS Code 3": naicsCodes[2]?.code || "",
+                  "Reason for NAICS Code 3": naicsCodes[2]?.reason || ""
+              };
+          } catch (error) {
+              console.error(`Error processing ${companyName}:`, error);
+              return {
+                  "Company Name": companyName,
+                  "Company URL": "Error",
+                  "Core Functions Summary": `Error: ${error.message}`,
+                  "NAICS Code 1": "",
+                  "Reason for NAICS Code 1": "",
+                  "NAICS Code 2": "",
+                  "Reason for NAICS Code 2": "",
+                  "NAICS Code 3": "",
+                  "Reason for NAICS Code 3": ""
+              };
+          }
+      }
+
+      // Main processing
+      let results = [];
+
+      async function processFile(file) {
+          try {
+              const text = await file.text();
+              console.log(text);
+              const lines = text.split('\r').join('\n').split('\n');
+              const headers = lines[0].split(',').map(h => h.trim());
+                alert(JSON.stringify(headers));
+
+              if (!headers.includes('Company Name')) {
+                  throw new Error('CSV must contain a "Company Name" column');
+              }
+
+              const companies = lines.slice(1)
+                  .map(line => line.split(',')[headers.indexOf('Company Name')])
+                  .filter(name => name && name.trim());
+
+              if (companies.length > 500) {
+                  throw new Error('Maximum 500 companies allowed');
+              }
+
+              document.getElementById('progress').classList.remove('d-none');
+              const progressBar = document.querySelector('.progress-bar');
+              const statusText = document.getElementById('statusText');
+
+              results = [];
+              for (let i = 0; i < companies.length; i++) {
+                  const company = companies[i].trim();
+                  statusText.textContent = `Processing company ${i + 1} of ${companies.length}: ${company}`;
+                  progressBar.style.width = `${((i + 1) / companies.length) * 100}%`;
+
+                  const result = await processCompany(company);
+                  results.push(result);
+
+                  // Add delay to prevent rate limiting
+                  await new Promise(resolve => setTimeout(resolve, 1000));
+              }
+
+              document.getElementById('results').classList.remove('d-none');
+              showAlert('Processing complete!', 'success');
+          } catch (error) {
+              showAlert(error.message);
+          } finally {
+              document.getElementById('progress').classList.add('d-none');
+          }
+      }
+
+      // UI Event Handlers
+      const dropZone = document.getElementById('dropZone');
+      const fileInput = document.getElementById('fileInput');
+
+      dropZone.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          dropZone.classList.add('dragover');
+      });
+
+      dropZone.addEventListener('dragleave', () => {
+          dropZone.classList.remove('dragover');
+      });
+
+      dropZone.addEventListener('drop', (e) => {
+          e.preventDefault();
+          dropZone.classList.remove('dragover');
+          const file = e.dataTransfer.files[0];
+          if (file?.type === 'text/csv') {
+              processFile(file);
+          } else {
+              showAlert('Please upload a CSV file');
+          }
+      });
+
+      document.getElementById('uploadBtn').addEventListener('click', () => {
+          fileInput.click();
+      });
+
+      fileInput.addEventListener('change', (e) => {
+          const file = e.target.files[0];
+          if (file) {
+              processFile(file);
+          }
+      });
+
+      document.getElementById('downloadBtn').addEventListener('click', () => {
+          if (results.length === 0) return;
+
+          const headers = Object.keys(results[0]);
+          const csv = [
+              headers.join(','),
+              ...results.map(row =>
+                  headers.map(header =>
+                      JSON.stringify(row[header] || '')
+                  ).join(',')
+              )
+          ].join('\n');
+
+          const blob = new Blob([csv], { type: 'text/csv' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'company_naics_results.csv';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+      });
+
+      document.getElementById('clearBtn').addEventListener('click', () => {
+          results = [];
+          document.getElementById('results').classList.add('d-none');
+          fileInput.value = '';
+          showAlert('Results cleared', 'info');
+      });
+    </script>
+  </body>
+</html>
