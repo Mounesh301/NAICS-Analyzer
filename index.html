@@ -192,10 +192,8 @@
       async function processFile(file) {
           try {
               const text = await file.text();
-              console.log(text);
               const lines = text.split('\r').join('\n').split('\n');
               const headers = lines[0].split(',').map(h => h.trim());
-                alert(JSON.stringify(headers));
 
               if (!headers.includes('Company Name')) {
                   throw new Error('CSV must contain a "Company Name" column');
